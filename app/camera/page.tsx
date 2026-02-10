@@ -6,15 +6,57 @@ import Link from "next/link";
 export default function CameraPage() {
   const [peerId, setPeerId] = useState<string>("");
   const [status, setStatus] = useState("Initializing camera...");
+  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>("");
   const videoRef = useRef<HTMLVideoElement>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const peerRef = useRef<any>(null);
+  const streamRef = useRef<MediaStream | null>(null);
 
+  // Initialize and get cameras
   useEffect(() => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let peerInstance: any = null;
-    let localStream: MediaStream | null = null;
+    const getCameras = async () => {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoDevices = devices.filter(
+          (device) => device.kind === "videoinput",
+        );
+        setDevices(videoDevices);
+        if (videoDevices.length > 0) {
+          setSelectedDeviceId(videoDevices[0].deviceId);
+        }
+      } catch (err) {
+        console.error("Error listing devices", err);
+      }
+    };
+
+    // Request Wake Lock to keep screen alive
+    const requestWakeLock = async () => {
+      try {
+        if ("wakeLock" in navigator) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          await (navigator as any).wakeLock.request("screen");
+          console.log("Wake Lock active!");
+        }
+      } catch (err) {
+        console.error("Wake Lock failed:", err);
+      }
+    };
+
+    getCameras();
+    requestWakeLock();
+  }, []);
+
+  // Handle camera stream and peer connection
+  useEffect(() => {
+    if (!selectedDeviceId && devices.length > 0) return; // Wait for selection if devices exist
 
     const startCamera = async () => {
       try {
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach((t) => t.stop());
+        }
+
         // Attempt to find any available getUserMedia implementation (includes legacay webkit/moz prefixes)
         const getMedia =
           navigator.mediaDevices && navigator.mediaDevices.getUserMedia
@@ -44,66 +86,87 @@ export default function CameraPage() {
           );
         }
 
-        const stream = await getMedia({
-          video: true,
+        const constraints = {
+          video: selectedDeviceId
+            ? { deviceId: { exact: selectedDeviceId } }
+            : true,
           audio: true,
-        });
-        localStream = stream;
+        };
+
+        const stream = await getMedia(constraints);
+        streamRef.current = stream;
 
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
         }
 
-        const { default: Peer } = await import("peerjs");
-        const peer = new Peer();
-        peerInstance = peer;
+        // Initialize Peer only once or if destroyed
+        if (!peerRef.current) {
+          const { default: Peer } = await import("peerjs");
+          const peer = new Peer();
+          peerRef.current = peer;
 
-        peer.on("open", (id) => {
-          setPeerId(id);
-          setStatus("Ready. Share ID below.");
-        });
-
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        peer.on("call", (call: any) => {
-          console.log("Incoming call from viewer");
-          setStatus("Viewer connected. Streaming...");
-          call.answer(stream);
-
-          call.on("close", () => {
-            setStatus("Viewer disconnected. Ready.");
+          peer.on("open", (id) => {
+            setPeerId(id);
+            setStatus("Ready. Share ID below.");
           });
 
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          call.on("error", (e: any) => {
-            console.error("Call error:", e);
-            setStatus("Connection error: " + e.message);
+          peer.on("call", (call: any) => {
+            console.log("Incoming call from viewer");
+            setStatus("Viewer connected. Streaming...");
+            call.answer(streamRef.current); // Answer with CURRENT stream
+
+            call.on("close", () => {
+              setStatus("Viewer disconnected. Ready.");
+            });
+
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            call.on("error", (e: any) => {
+              console.error("Call error:", e);
+              setStatus("Connection error: " + e.message);
+            });
           });
-        });
 
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        peer.on("error", (err: any) => {
-          console.error(err);
-          setStatus("Error: " + err.message);
-        });
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          peer.on("error", (err: any) => {
+            console.error(err);
+            setStatus("Error: " + err.message);
+          });
 
-        peer.on("disconnected", () => {
-          setStatus("Disconnected from server.");
-        });
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } catch (err: any) {
+          peer.on("disconnected", () => {
+            setStatus("Disconnected from server.");
+          });
+        } else {
+          // If peer already exists, we might need to handle stream replacement for existing calls?
+          // For simplicity, we just update the local video.
+          // PeerJS doesn't easily support hot-swapping streams in an active call without renegotiation.
+          // But calls answered AFTER this will get the new stream.
+        }
+      } catch (err: Error | unknown) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
         console.error("Camera access denied or error:", err);
-        setStatus("Error accessing camera: " + err.message);
+        setStatus("Error accessing camera: " + errorMessage);
       }
     };
 
     startCamera();
 
     return () => {
-      if (localStream) {
-        localStream.getTracks().forEach((track) => track.stop());
+      // Cleanup only on unmount (removed to allow stream persistence across renders if needed)
+      // But here we want to restart on device change, so we might stop tracks
+      // Actually, we handle track stopping at startCamera beginning
+    };
+  }, [selectedDeviceId]);
+
+  // Cleanup on final unmount
+  useEffect(() => {
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
       }
-      if (peerInstance) {
-        peerInstance.destroy();
+      if (peerRef.current) {
+        peerRef.current.destroy();
       }
     };
   }, []);
@@ -118,11 +181,26 @@ export default function CameraPage() {
           >
             ← Back
           </Link>
-          <span
-            className={`text-xs font-bold px-2 py-1 rounded-full ${status.includes("Error") ? "bg-red-100 text-red-600" : "bg-green-100 text-green-700"}`}
-          >
-            {status}
-          </span>
+          <div className="flex flex-col items-end">
+            <span
+              className={`text-xs font-bold px-2 py-1 rounded-full mb-1 ${status.includes("Error") ? "bg-red-100 text-red-600" : "bg-green-100 text-green-700"}`}
+            >
+              {status}
+            </span>
+            {devices.length > 0 && (
+              <select
+                value={selectedDeviceId}
+                onChange={(e) => setSelectedDeviceId(e.target.value)}
+                className="text-xs p-1 border rounded bg-white text-gray-700 max-w-37.5"
+              >
+                {devices.map((d) => (
+                  <option key={d.deviceId} value={d.deviceId}>
+                    {d.label || `Camera ${devices.indexOf(d) + 1}`}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
         </div>
 
         <div className="relative aspect-video bg-black rounded-xl overflow-hidden mb-6 shadow-inner">
@@ -143,7 +221,7 @@ export default function CameraPage() {
             Your ID Code
           </label>
           <div className="flex items-center gap-2">
-            <code className="flex-1 text-2xl font-mono font-bold bg-white px-4 py-2 rounded border border-gray-200 text-gray-700 text-center select-all">
+            <code className="flex-1 text-sm font-mono font-bold bg-white px-4 py-2 rounded border border-gray-200 text-gray-700 text-center select-all break-all">
               {peerId || "Loading..."}
             </code>
             <button
