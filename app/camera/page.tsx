@@ -17,12 +17,28 @@ export default function CameraPage() {
   useEffect(() => {
     const getCameras = async () => {
       try {
+        // Enumerate devices. Note: Labels are often empty until permission is granted.
+        // We will call this again after stream is acquired if needed, but here we set initial list.
         const devices = await navigator.mediaDevices.enumerateDevices();
         const videoDevices = devices.filter(
           (device) => device.kind === "videoinput",
         );
         setDevices(videoDevices);
-        if (videoDevices.length > 0) {
+
+        // Try to identify back camera
+        const backCamera = videoDevices.find(
+          (d) =>
+            d.label.toLowerCase().includes("back") ||
+            d.label.toLowerCase().includes("environment"),
+        );
+
+        if (backCamera) {
+          setSelectedDeviceId(backCamera.deviceId);
+        } else if (videoDevices.length > 0) {
+          // Don't force select the first one immediately if we want to rely on 'facingMode: environment' default
+          // But for the dropdown to work, we need a value.
+          // We'll leave it empty and let startCamera pick environment by default,
+          // then update list after stream start.
           setSelectedDeviceId(videoDevices[0].deviceId);
         }
       } catch (err) {
@@ -35,8 +51,20 @@ export default function CameraPage() {
       try {
         if ("wakeLock" in navigator) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          await (navigator as any).wakeLock.request("screen");
+          let wakeLock = await (navigator as any).wakeLock.request("screen");
           console.log("Wake Lock active!");
+
+          wakeLock.addEventListener("release", () => {
+            console.log("Wake Lock released");
+          });
+
+          // Re-acquire on visibility change
+          document.addEventListener("visibilitychange", async () => {
+            if (document.visibilityState === "visible") {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              wakeLock = await (navigator as any).wakeLock.request("screen");
+            }
+          });
         }
       } catch (err) {
         console.error("Wake Lock failed:", err);
@@ -49,7 +77,8 @@ export default function CameraPage() {
 
   // Handle camera stream and peer connection
   useEffect(() => {
-    if (!selectedDeviceId && devices.length > 0) return; // Wait for selection if devices exist
+    // If we have devices but none selected, we might want to default to rear.
+    // However, we'll let the constraint logic handle it below if selectedDeviceId is empty.
 
     const startCamera = async () => {
       try {
@@ -89,12 +118,30 @@ export default function CameraPage() {
         const constraints = {
           video: selectedDeviceId
             ? { deviceId: { exact: selectedDeviceId } }
-            : true,
+            : { facingMode: "environment" },
           audio: true,
         };
 
         const stream = await getMedia(constraints);
         streamRef.current = stream;
+
+        // Refresh device list with labels after permission is granted
+        if (devices.length === 0 || devices[0].label === "") {
+          const newDevices = await navigator.mediaDevices.enumerateDevices();
+          const videoDevices = newDevices.filter(
+            (device) => device.kind === "videoinput",
+          );
+          setDevices(videoDevices);
+
+          // If we didn't have a selection, and now we do, try to match the active stream's track settings
+          if (!selectedDeviceId) {
+            const track = stream.getVideoTracks()[0];
+            const settings = track.getSettings();
+            if (settings.deviceId) {
+              setSelectedDeviceId(settings.deviceId);
+            }
+          }
+        }
 
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
