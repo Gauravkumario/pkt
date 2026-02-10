@@ -42,7 +42,9 @@ export default function ViewerPage() {
         // Add silent audio track to ensure audio transceiver is created
         try {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+          const audioCtx = new (
+            window.AudioContext || (window as any).webkitAudioContext
+          )();
           const osc = audioCtx.createOscillator();
           const dst = audioCtx.createMediaStreamDestination();
           osc.connect(dst);
@@ -52,7 +54,7 @@ export default function ViewerPage() {
         } catch (e) {
           console.warn("Could not create dummy audio track", e);
         }
-        
+
         const call = peer.call(remotePeerId.trim(), dummyStream);
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any

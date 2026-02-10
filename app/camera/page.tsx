@@ -18,19 +18,20 @@ export default function CameraPage() {
         // Attempt to find any available getUserMedia implementation (includes legacay webkit/moz prefixes)
         const getMedia =
           navigator.mediaDevices && navigator.mediaDevices.getUserMedia
-            ? (c: MediaStreamConstraints) => navigator.mediaDevices.getUserMedia(c)
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            : (navigator as any).webkitGetUserMedia
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              ? (c: any) =>
+            ? (c: MediaStreamConstraints) =>
+                navigator.mediaDevices.getUserMedia(c)
+            : // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              (navigator as any).webkitGetUserMedia
+              ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                (c: any) =>
                   new Promise<MediaStream>((resolve, reject) =>
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     (navigator as any).webkitGetUserMedia(c, resolve, reject),
                   )
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              : (navigator as any).mozGetUserMedia
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                ? (c: any) =>
+              : // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                (navigator as any).mozGetUserMedia
+                ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  (c: any) =>
                     new Promise<MediaStream>((resolve, reject) =>
                       // eslint-disable-next-line @typescript-eslint/no-explicit-any
                       (navigator as any).mozGetUserMedia(c, resolve, reject),
